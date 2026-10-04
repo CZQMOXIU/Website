@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>棋类乐园 - 管理后台</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", sans-serif;
+    min-height: 100vh; background: #0f172a; color: #e2e8f0; padding: 20px;
+  }
+  .login-box {
+    max-width: 360px; margin: 80px auto; background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 16px; padding: 36px;
+  }
+  .login-box h1 { text-align: center; font-size: 20px; margin-bottom: 24px; color: #90caf9; }
+  .form-group { margin-bottom: 16px; }
+  .form-group input {
+    width: 100%; padding: 12px 14px; border: 2px solid rgba(255,255,255,0.15);
+    border-radius: 10px; background: rgba(255,255,255,0.05); color: #fff;
+    font-size: 15px; outline: none; font-family: inherit;
+  }
+  .form-group input:focus { border-color: #3949ab; }
+  .btn {
+    width: 100%; padding: 12px; border: none; border-radius: 10px;
+    background: #3949ab; color: #fff; font-size: 15px; cursor: pointer; font-family: inherit;
+  }
+  .msg { text-align: center; color: #ef5350; margin-top: 12px; font-size: 13px; min-height: 18px; }
+  .main { display: none; max-width: 1200px; margin: 0 auto; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .topbar h1 { font-size: 20px; color: #90caf9; }
+  .topbar .btn { width: auto; padding: 8px 16px; background: rgba(239,83,80,0.2); color: #ef5350; }
+  .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
+  .stat { background: rgba(255,255,255,0.06); border-radius: 12px; padding: 16px; text-align: center; }
+  .stat .num { font-size: 26px; font-weight: bold; color: #64b5f6; }
+  .stat .lbl { font-size: 12px; color: #94a3b8; margin-top: 6px; }
+  .card {
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px; padding: 18px; margin-bottom: 20px; overflow: auto;
+  }
+  .card h2 { font-size: 15px; margin-bottom: 12px; color: #90caf9; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08); white-space: nowrap; }
+  th { color: #94a3b8; font-weight: normal; }
+  .win { color: #81c784; }
+  .lose { color: #ef5350; }
+  .draw { color: #ffd54f; }
+</style>
+</head>
+<body>
+<div class="login-box" id="loginBox">
+  <h1>🔐 管理后台</h1>
+  <div class="form-group"><input id="admUser" placeholder="管理员账号"></div>
+  <div class="form-group"><input id="admPass" type="password" placeholder="密码"></div>
+  <button class="btn" onclick="adminLogin()">登 录</button>
+  <div class="msg" id="loginMsg"></div>
+</div>
+<div class="main" id="main">
+  <div class="topbar">
+    <h1>📊 棋类乐园管理后台</h1>
+    <button class="btn" onclick="logout()">退出</button>
+  </div>
+  <div class="stats" id="statsRow"></div>
+  <div class="card">
+    <h2>👥 用户列表（含注册时间）</h2>
+    <table><thead><tr><th>ID</th><th>用户名</th><th>胜</th><th>负</th><th>平</th><th>注册时间</th></tr></thead><tbody id="usersBody"></tbody></table>
+  </div>
+  <div class="card">
+    <h2>🎮 对局记录（最近200局）</h2>
+    <table><thead><tr><th>ID</th><th>玩家</th><th>棋类</th><th>对手</th><th>结果</th><th>手数</th><th>时间</th></tr></thead><tbody id="gamesBody"></tbody></table>
+  </div>
+</div>
+<script>
+const GAME_CN = { gobang: '五子棋', xiangqi: '中国象棋', chess: '国际象棋', go: '围棋', flying: '飞行棋' };
+function b64(s) { return btoa(unescape(encodeURIComponent(s))); }
+async function adminLogin() {
+  const username = document.getElementById('admUser').value.trim();
+  const password = document.getElementById('admPass').value;
+  const msg = document.getElementById('loginMsg');
+  if (!username || !password) { msg.textContent = '请输入账号密码'; return; }
+  try {
+    const r = await (await fetch('/api/admin/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password: b64(password) })
+    })).json();
+    if (r.code !== 0) { msg.textContent = r.msg; return; }
+    sessionStorage.setItem('admin', '1');
+    showMain();
+  } catch (e) { msg.textContent = '网络错误'; }
+}
+async function showMain() {
+  document.getElementById('loginBox').style.display = 'none';
+  document.getElementById('main').style.display = 'block';
+  await loadSummary();
+  await loadUsers();
+  await loadGames();
+  setInterval(loadSummary, 5000);
+  setInterval(loadUsers, 10000);
+  setInterval(loadGames, 10000);
+}
+async function loadSummary() {
+  try {
+    const r = await (await fetch('/api/admin/summary')).json();
+    const d = r.data;
+    document.getElementById('statsRow').innerHTML = `
+      <div class="stat"><div class="num">${d.totalUsers}</div><div class="lbl">注册用户</div></div>
+      <div class="stat"><div class="num">${d.totalGames}</div><div class="lbl">总对局</div></div>
+      <div class="stat"><div class="num">${d.totalWins}</div><div class="lbl">胜</div></div>
+      <div class="stat"><div class="num">${d.totalLoses}</div><div class="lbl">负</div></div>
+      <div class="stat"><div class="num">${d.online}</div><div class="lbl">在线(去重)</div></div>`;
+  } catch (e) {}
+}
+async function loadUsers() {
+  try {
+    const r = await (await fetch('/api/admin/users')).json();
+    document.getElementById('usersBody').innerHTML = r.data.map(u => `
+      <tr><td>${u.id}</td><td>${u.username}</td>
+      <td class="win">${u.win}</td><td class="lose">${u.lose}</td><td class="draw">${u.draw}</td>
+      <td>${u.created_at}</td></tr>`).join('');
+  } catch (e) {}
+}
+async function loadGames() {
+  try {
+    const r = await (await fetch('/api/admin/games')).json();
+    document.getElementById('gamesBody').innerHTML = r.data.map(g => `
+      <tr><td>${g.id}</td><td>${g.username}</td><td>${GAME_CN[g.game] || g.game}</td>
+      <td>${g.opponent}</td>
+      <td class="${g.result}">${g.result === 'win' ? '胜' : g.result === 'lose' ? '负' : '平'}</td>
+      <td>${g.moves}</td><td>${g.created_at}</td></tr>`).join('');
+  } catch (e) {}
+}
+function logout() {
+  sessionStorage.removeItem('admin');
+  location.reload();
+}
+if (sessionStorage.getItem('admin')) showMain();
+</script>
+</body>
+</html>
