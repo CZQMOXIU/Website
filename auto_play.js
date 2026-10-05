@@ -160,6 +160,7 @@ function startBot(game) {
   let candTimer = null;
   let lastStateKey = '';
   let inGame = false;
+  let bannedFlag = false;
 
   const cn = GAME_CN[game];
 
@@ -241,9 +242,18 @@ function startBot(game) {
     setTimeout(emitMatch, 1500);
   });
 
+  socket.on('banned', () => {
+    bannedFlag = true;
+    clearCand();
+    inGame = false;
+    log('⚠️ 该账号已被管理员封禁，自动退出');
+    setTimeout(() => process.exit(0), 300);
+  });
+
   socket.on('disconnect', () => {
     clearCand();
     inGame = false;
+    if (bannedFlag) return;
     log('[' + cn + ']连接断开，尝试重连…');
     setTimeout(() => { if (!socket.connected) socket.connect(); }, 2000);
   });
