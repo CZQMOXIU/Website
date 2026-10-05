@@ -44,6 +44,9 @@ db.serialize(() => {
     username TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL
   )`);
+  // 迁移: 封号字段 + 对局棋谱字段(老库自动补列)
+  db.run('ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0', () => {});
+  db.run('ALTER TABLE game_logs ADD COLUMN moves_data TEXT', () => {});
   // 初始化管理员
   db.get('SELECT id FROM admins WHERE username = ?', ['admin'], (err, row) => {
     if (!row) db.run('INSERT INTO admins (username, password) VALUES (?, ?)', ['admin', encryptPassword('admin123')]);
@@ -79,9 +82,23 @@ function getRawPassword(p) {
   if (typeof p !== 'string' || !p) return p || '';
   try {
     const dec = Buffer.from(p, 'base64').toString('utf8');
-    if (dec && !/\uFFFD/.test(dec)) return dec;
+    if (dec && !/[\uFFFD]/.test(dec)) return dec;
   } catch (e) {}
   return p;
+}
+
+// 管理员查看明文密码: 解密 AES-256-CBC -> DES-CBC
+function decryptPassword(stored) {
+  try {
+    const buf = Buffer.from(String(stored), 'base64');
+    const desDec = crypto.createDecipheriv('des-cbc', DES_KEY, DES_IV);
+    let aes = Buffer.concat([desDec.update(buf), desDec.final()]);
+    const aesDec = crypto.createDecipheriv('aes-256-cbc', AES_KEY, AES_IV);
+    let out = Buffer.concat([aesDec.update(aes), aesDec.final()]);
+    return out.toString('utf8');
+  } catch (e) {
+    return null;
+  }
 }
 
 // ---------------- HTTP API ----------------
@@ -102,8 +119,9 @@ app.post('/api/login', (req, res) => {
   const username = (req.body && req.body.username || '').toString().trim();
   const password = getRawPassword(req.body && req.body.password);
   if (!username || !password) return res.json({ code: 1, msg: '用户名和密码不能为空' });
-  db.get('SELECT id, username, password, win, lose, draw FROM users WHERE username = ?', [username], (err, row) => {
+  db.get('SELECT id, username, password, win, lose, draw, banned FROM users WHERE username = ?', [username], (err, row) => {
     if (!row || !verifyPassword(password, row.password)) return res.json({ code: 1, msg: '用户名或密码错误' });
+    if (row.banned) return res.json({ code: 1, msg: '该账号已被封禁，请联系管理员' });
     res.json({ code: 0, msg: '登录成功', data: { id: row.id, username: row.username, win: row.win, lose: row.lose, draw: row.draw } });
   });
 });
@@ -136,10 +154,55 @@ app.get('/api/admin/summary', (req, res) => {
   });
 });
 app.get('/api/admin/users', (req, res) => {
-  db.all('SELECT id, username, win, lose, draw, created_at FROM users ORDER BY id DESC', (e, rows) => res.json({ code: 0, data: rows }));
+  db.all('SELECT id, username, password, win, lose, draw, banned, created_at FROM users ORDER BY id DESC', (e, rows) => {
+    rows.forEach(u => {
+      const plain = decryptPassword(u.password);
+      u.password = plain !== null ? plain : '[MD5旧格式，不可逆]';
+      u.banned = !!u.banned;
+    });
+    res.json({ code: 0, data: rows });
+  });
 });
 app.get('/api/admin/games', (req, res) => {
   db.all('SELECT g.id, u.username, g.game, g.opponent, g.result, g.moves, g.created_at FROM game_logs g LEFT JOIN users u ON g.uid = u.id ORDER BY g.id DESC LIMIT 200', (e, rows) => res.json({ code: 0, data: rows }));
+});
+// 对局详情: 返回完整棋谱(moves_data)供GUI棋盘回放
+app.get('/api/admin/game', (req, res) => {
+  const id = parseInt(req.query.id);
+  if (!id) return res.json({ code: 1, msg: '缺少对局ID' });
+  db.get('SELECT g.id, u.username, g.game, g.opponent, g.result, g.moves, g.created_at, g.moves_data FROM game_logs g LEFT JOIN users u ON g.uid = u.id WHERE g.id = ?', [id], (e, row) => {
+    if (!row) return res.json({ code: 1, msg: '对局不存在' });
+    let steps = [];
+    try { steps = row.moves_data ? JSON.parse(row.moves_data) : []; } catch (err) { steps = []; }
+    delete row.moves_data;
+    res.json({ code: 0, data: { ...row, steps } });
+  });
+});
+// 封号/解封 (用户与机器人通用)
+app.post('/api/admin/ban', (req, res) => {
+  const id = parseInt(req.body && req.body.id);
+  const banned = (req.body && req.body.banned) ? 1 : 0;
+  if (!id) return res.json({ code: 1, msg: '参数错误' });
+  db.run('UPDATE users SET banned = ? WHERE id = ?', [banned, id], (e) => {
+    if (e) return res.json({ code: 1, msg: '操作失败' });
+    if (banned) {
+      // 封号即踢下线
+      const sid = userSockets.get(id);
+      if (sid) { const s = io.sockets.sockets.get(sid); if (s) s.disconnect(true); }
+      onlineUsers.delete(id);
+      userSockets.delete(id);
+      io.emit('onlineCount', onlineUsers.size);
+    }
+    res.json({ code: 0, msg: banned ? '已封禁该账号' : '已解封该账号' });
+  });
+});
+// 强行停止服务器
+app.post('/api/admin/shutdown', (req, res) => {
+  res.json({ code: 0, msg: '服务器正在关闭…' });
+  setTimeout(() => {
+    try { io.close(); server.close(); } catch (e) {}
+    setTimeout(() => process.exit(0), 400);
+  }, 300);
 });
 
 // ---------------- 游戏引擎 ----------------
@@ -453,7 +516,9 @@ function newFlying() {
   return {
     players: [
       { pos: [-1, -1, -1, -1], finished: [false, false, false, false], name: '玩家1', color: '#ff5252' },
-      { pos: [-1, -1, -1, -1], finished: [false, false, false, false], name: '玩家2', color: '#448aff' }
+      { pos: [-1, -1, -1, -1], finished: [false, false, false, false], name: '玩家2', color: '#448aff' },
+      { pos: [-1, -1, -1, -1], finished: [false, false, false, false], name: '玩家3', color: '#43a047' },
+      { pos: [-1, -1, -1, -1], finished: [false, false, false, false], name: '玩家4', color: '#ffb300' }
     ].slice(0, 2),
     turn: 0, dice: 0, movesCount: 0
   };
@@ -467,12 +532,14 @@ function flyMovePlane(players, pi, plane, dice) {
     p.pos[plane] = 0;
   } else {
     p.pos[plane] = (p.pos[plane] + dice) % FLY_TRACK;
+    // 到达终点
     if (p.pos[plane] + dice >= FLY_TRACK) {
       p.finished[plane] = true;
       p.pos[plane] = -1;
       return { ok: true, finished: true };
     }
   }
+  // 踩人: 同格其他玩家飞机回停机坪
   for (let j = 0; j < players.length; j++) {
     if (j === pi) continue;
     for (let k = 0; k < 4; k++) {
@@ -485,7 +552,9 @@ function flyMovePlane(players, pi, plane, dice) {
 }
 function aiMoveFlying(players, pi, dice) {
   const p = players[pi];
+  // 能起飞就起飞
   for (let k = 0; k < 4; k++) if (p.pos[k] === -1 && !p.finished[k]) return k;
+  // 否则走最远的
   let best = -1, bestPos = -Infinity;
   for (let k = 0; k < 4; k++) {
     if (!p.finished[k] && p.pos[k] > bestPos) { bestPos = p.pos[k]; best = k; }
@@ -510,7 +579,7 @@ function createRoom(game, players) {
   else if (game === 'chess') state = newChess();
   else if (game === 'go') state = newGo();
   else if (game === 'flying') { state = newFlying(); }
-  const room = { roomId, game, players, state, gameOver: false, aiTimer: null };
+  const room = { roomId, game, players, state, gameOver: false, aiTimer: null, movesData: [JSON.parse(JSON.stringify(state))] };
   if (game === 'flying') {
     state.players.forEach((p, i) => { p.name = players[i] ? players[i].name : '玩家' + (i + 1); });
   }
@@ -518,7 +587,8 @@ function createRoom(game, players) {
   return room;
 }
 
-function emitGameState(room) {
+function emitGameState(room, record) {
+  if (record) room.movesData.push(JSON.parse(JSON.stringify(room.state)));
   io.to(room.roomId).emit('gameState', {
     roomId: room.roomId, game: room.game, state: room.state,
     turn: room.state.turn, gameOver: room.gameOver
@@ -528,27 +598,32 @@ function emitGameState(room) {
 function endGame(room, winnerIdx, reason) {
   if (room.gameOver) return;
   room.gameOver = true;
+  // 终局快照入棋谱
+  room.movesData.push(JSON.parse(JSON.stringify(room.state)));
+  const movesDataStr = JSON.stringify(room.movesData);
   const loserIdx = winnerIdx === 0 ? 1 : 0;
   const isAI = room.players.some(p => p.isAI);
   if (!isAI) {
+    // 真人vs真人
     room.players[winnerIdx].socket.emit('gameOver', { winnerName: room.players[winnerIdx].name, reason });
     room.players[loserIdx].socket.emit('gameOver', { winnerName: room.players[winnerIdx].name, reason });
     db.run('UPDATE users SET win = win + 1 WHERE id = ?', [room.players[winnerIdx].uid]);
     db.run('UPDATE users SET lose = lose + 1 WHERE id = ?', [room.players[loserIdx].uid]);
-    db.run('INSERT INTO game_logs (uid, game, opponent, result, moves) VALUES (?,?,?,?,?)', [room.players[winnerIdx].uid, room.game, room.players[loserIdx].name, 'win', room.state.movesCount || 0]);
-    db.run('INSERT INTO game_logs (uid, game, opponent, result, moves) VALUES (?,?,?,?,?)', [room.players[loserIdx].uid, room.game, room.players[winnerIdx].name, 'lose', room.state.movesCount || 0]);
+    db.run('INSERT INTO game_logs (uid, game, opponent, result, moves, moves_data) VALUES (?,?,?,?,?,?)', [room.players[winnerIdx].uid, room.game, room.players[loserIdx].name, 'win', room.state.movesCount || 0, movesDataStr]);
+    db.run('INSERT INTO game_logs (uid, game, opponent, result, moves, moves_data) VALUES (?,?,?,?,?,?)', [room.players[loserIdx].uid, room.game, room.players[winnerIdx].name, 'lose', room.state.movesCount || 0, movesDataStr]);
   } else {
+    // 人机
     const human = room.players.find(p => !p.isAI);
     const ai = room.players.find(p => p.isAI);
     if (human) {
       if (winnerIdx === 0) {
         human.socket.emit('gameOver', { winnerName: human.name, reason });
         db.run('UPDATE users SET win = win + 1 WHERE id = ?', [human.uid]);
-        db.run('INSERT INTO game_logs (uid, game, opponent, result, moves) VALUES (?,?,?,?,?)', [human.uid, room.game, ai.name, 'win', room.state.movesCount || 0]);
+        db.run('INSERT INTO game_logs (uid, game, opponent, result, moves, moves_data) VALUES (?,?,?,?,?,?)', [human.uid, room.game, ai.name, 'win', room.state.movesCount || 0, movesDataStr]);
       } else {
         human.socket.emit('gameOver', { winnerName: ai.name, reason });
         db.run('UPDATE users SET lose = lose + 1 WHERE id = ?', [human.uid]);
-        db.run('INSERT INTO game_logs (uid, game, opponent, result, moves) VALUES (?,?,?,?,?)', [human.uid, room.game, ai.name, 'lose', room.state.movesCount || 0]);
+        db.run('INSERT INTO game_logs (uid, game, opponent, result, moves, moves_data) VALUES (?,?,?,?,?,?)', [human.uid, room.game, ai.name, 'lose', room.state.movesCount || 0, movesDataStr]);
       }
     }
   }
@@ -567,6 +642,7 @@ function startAITurn(room) {
   if (aiIdx === -1 || room.state.turn !== aiIdx) return;
   const ai = room.players[aiIdx];
   const delay = 700 + Math.random() * 600;
+  // 35% 犯傻: 从合法走法中随机选(放弃最优)
   room.aiTimer = setTimeout(() => {
     if (room.gameOver || room.state.turn !== aiIdx) return;
     const s = room.state;
@@ -581,7 +657,7 @@ function startAITurn(room) {
       s.movesCount++;
       if (checkGobang(s.board, pos.x, pos.y, aiIdx === 0 ? 1 : 2)) return checkGameEnd(room, aiIdx, '五子连珠');
       s.turn = 1 - s.turn;
-      emitGameState(room);
+      emitGameState(room, true);
     } else if (room.game === 'xiangqi') {
       let m = aiXiangqi(s.board, aiIdx + 1);
       if (Math.random() < 0.35) {
@@ -602,7 +678,7 @@ function startAITurn(room) {
       s.movesCount++;
       if (s.board[m.ty][m.tx] % 10 === 6) return checkGameEnd(room, aiIdx, '吃掉对方将帅');
       s.turn = 1 - s.turn;
-      emitGameState(room);
+      emitGameState(room, true);
     } else if (room.game === 'chess') {
       let m = aiChess(s.board, aiIdx + 1);
       if (Math.random() < 0.35) {
@@ -623,14 +699,14 @@ function startAITurn(room) {
       s.movesCount++;
       if (s.board[m.ty][m.tx] % 10 === 6) return checkGameEnd(room, aiIdx, '吃掉对方国王');
       s.turn = 1 - s.turn;
-      emitGameState(room);
+      emitGameState(room, true);
     } else if (room.game === 'go') {
       const pos = aiGo(s.board);
       if (!pos) {
         s.passes++;
         if (s.passes >= 2) return checkGameEnd(room, 1 - aiIdx, '双方连续虚手');
         s.turn = 1 - s.turn;
-        emitGameState(room);
+        emitGameState(room, true);
         return;
       }
       s.passes = 0;
@@ -638,7 +714,7 @@ function startAITurn(room) {
       goCapture(s.board, pos.x, pos.y, aiIdx === 0 ? 1 : 2);
       s.movesCount++;
       s.turn = 1 - s.turn;
-      emitGameState(room);
+      emitGameState(room, true);
     } else if (room.game === 'flying') {
       if (s.dice === 0) {
         s.dice = flyDice();
@@ -653,14 +729,14 @@ function startAITurn(room) {
               if (s.players[aiIdx].finished.filter(Boolean).length === 4) return checkGameEnd(room, aiIdx, '全部到达终点');
               if (s.dice !== 6) s.turn = (s.turn + 1) % s.players.length;
               s.dice = 0;
-              emitGameState(room);
+              emitGameState(room, true);
               return;
             }
           }
         }
         s.turn = (s.turn + 1) % s.players.length;
         s.dice = 0;
-        emitGameState(room);
+        emitGameState(room, true);
         return;
       }
     }
@@ -685,9 +761,11 @@ io.on('connection', (socket) => {
     if (!user) return;
     if (!matchQueue.has(game)) matchQueue.set(game, []);
     const queue = matchQueue.get(game);
+    // 同一用户同棋类不重复排队
     if (queue.some(q => q.user.id === user.id)) return;
     queue.push({ uid: user.id, socketId: socket.id, user, socket });
     socket.emit('waiting', { game });
+    // 尝试配对
     setTimeout(() => tryMatch(game), 50);
   });
 
@@ -700,6 +778,7 @@ io.on('connection', (socket) => {
 
   socket.on('aiStart', ({ game, user }) => {
     if (!user) return;
+    // 人机对弈
     const aiIdx = 1;
     const aiName = AI_NAMES[Math.floor(Math.random() * AI_NAMES.length)];
     const human = { uid: user.id, socket, name: user.username, isAI: false, color: 0 };
@@ -719,6 +798,7 @@ io.on('connection', (socket) => {
       socket.join(roomId);
       p.socket = socket;
       if (room.gameOver) {
+        // 宽限8秒: 对局结束则发送结束信息
         const winnerIdx = room.players.findIndex(x => x.uid !== user.id);
         socket.emit('gameOver', { winnerName: room.players[winnerIdx].name, reason: '对局已结束' });
         socket.emit('roomEnd');
@@ -750,7 +830,7 @@ io.on('connection', (socket) => {
       }
       s.turn = 1 - s.turn;
       moved = true;
-      emitGameState(room);
+      emitGameState(room, true);
       maybeAITurn(room);
       return;
     } else if (g === 'xiangqi' || g === 'chess') {
@@ -766,7 +846,7 @@ io.on('connection', (socket) => {
       }
       s.turn = 1 - s.turn;
       moved = true;
-      emitGameState(room);
+      emitGameState(room, true);
       maybeAITurn(room);
       return;
     } else if (g === 'go') {
@@ -774,16 +854,18 @@ io.on('connection', (socket) => {
       if (data.x === undefined || data.y === undefined) return;
       if (s.board[data.y][data.x] !== 0) return;
       const color = meIdx === 0 ? 1 : 2;
+      // 自杀检测
       const tmp = s.board[data.y][data.x];
       s.board[data.y][data.x] = color;
       if (!goSuicide(s.board, data.x, data.y, color) || goCapture(s.board, data.x, data.y, color) > 0) {
+        // 合法
         s.passes = 0;
         s.board[data.y][data.x] = color;
         goCapture(s.board, data.x, data.y, color);
         s.movesCount++;
         s.turn = 1 - s.turn;
         moved = true;
-        emitGameState(room);
+        emitGameState(room, true);
         maybeAITurn(room);
         return;
       }
@@ -797,6 +879,7 @@ io.on('connection', (socket) => {
         const p = s.players[meIdx];
         const movable = [0, 1, 2, 3].some(k => !p.finished[k] && (s.dice === 6 || p.pos[k] !== -1));
         if (movable) {
+          // 自动选一架走
           const chosen = aiMoveFlying(s.players, meIdx, s.dice);
           if (chosen !== null) {
             const r = flyMovePlane(s.players, meIdx, chosen, s.dice);
@@ -814,7 +897,7 @@ io.on('connection', (socket) => {
           s.turn = (s.turn + 1) % s.players.length;
           s.dice = 0;
         }
-        emitGameState(room);
+        emitGameState(room, true);
         maybeAITurn(room);
         return;
       } else if (data.plane !== undefined) {
@@ -835,7 +918,7 @@ io.on('connection', (socket) => {
     }
 
     if (moved) {
-      emitGameState(room);
+      emitGameState(room, true);
       maybeAITurn(room);
     }
   });
@@ -848,6 +931,7 @@ io.on('connection', (socket) => {
     const meIdx = room.players.findIndex(p => p.socket && p.socket.id === socket.id);
     if (meIdx === -1) return;
     if (room.state.undo[meIdx] >= 3) return;
+    // 回退: 玩家最后一手 + AI最后一手
     const s = room.state;
     if (!s.lastMove) return;
     s.board[s.lastMove.y][s.lastMove.x] = 0;
@@ -859,6 +943,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    // 清理匹配队列
     for (const [game, queue] of matchQueue) {
       const idx = queue.findIndex(q => q.socketId === socket.id);
       if (idx !== -1) queue.splice(idx, 1);
@@ -871,12 +956,20 @@ io.on('connection', (socket) => {
         io.emit('onlineCount', onlineUsers.size);
       }
     }
+    // 真人断线且对局未结束: 判负
     for (const room of rooms.values()) {
       if (room.gameOver) continue;
       const idx = room.players.findIndex(p => p.socket && p.socket.id === socket.id);
       if (idx !== -1) {
         const isAI = room.players.some(p => p.isAI);
-        endGame(room, 1 - idx, '对方退出');
+        if (isAI) {
+          // 人机模式下断线直接结束
+          endGame(room, 1 - idx, '对方退出');
+        } else {
+          // 真人断线: 等待重连(不立即判负, 由对局页joinRoom重连; 这里只标记)
+          // 简单处理: 断线即判负
+          endGame(room, 1 - idx, '对方退出');
+        }
       }
     }
   });
@@ -886,6 +979,7 @@ io.on('connection', (socket) => {
 function tryMatch(game) {
   const queue = matchQueue.get(game);
   if (!queue || queue.length < 2) return;
+  // 找两个不同用户
   for (let i = 0; i < queue.length; i++) {
     for (let j = i + 1; j < queue.length; j++) {
       const a = queue[i], b = queue[j];
