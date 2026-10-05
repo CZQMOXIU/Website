@@ -186,11 +186,19 @@ app.post('/api/admin/ban', (req, res) => {
   db.run('UPDATE users SET banned = ? WHERE id = ?', [banned, id], (e) => {
     if (e) return res.json({ code: 1, msg: '操作失败' });
     if (banned) {
-      // 封号即踢下线
+      // 封号即踢下线: 先通知再断开
       const sid = userSockets.get(id);
-      if (sid) { const s = io.sockets.sockets.get(sid); if (s) s.disconnect(true); }
+      if (sid) {
+        const s = io.sockets.sockets.get(sid);
+        if (s) { s.emit('banned', { msg: '该账号已被封禁' }); s.disconnect(true); }
+      }
       onlineUsers.delete(id);
       userSockets.delete(id);
+      // 同时清出所有匹配队列
+      for (const [game, queue] of matchQueue) {
+        const idx = queue.findIndex(q => q.uid === id);
+        if (idx !== -1) queue.splice(idx, 1);
+      }
       io.emit('onlineCount', onlineUsers.size);
     }
     res.json({ code: 0, msg: banned ? '已封禁该账号' : '已解封该账号' });
@@ -750,23 +758,42 @@ function maybeAITurn(room) {
 
 // ---------------- Socket ----------------
 io.on('connection', (socket) => {
+  // 封禁拦截: 所有入口统一检查
+  function checkBanned(user, cb) {
+    if (!user || !user.id) return cb(false);
+    db.get('SELECT banned FROM users WHERE id = ?', [user.id], (e, row) => {
+      if (row && row.banned) {
+        socket.emit('banned', { msg: '该账号已被封禁，无法进入' });
+        socket.disconnect(true);
+        return cb(true);
+      }
+      cb(false);
+    });
+  }
+
   socket.on('loginSocket', (user) => {
-    socket.data.user = user;
-    onlineUsers.set(user.id, user.username);
-    userSockets.set(user.id, socket.id);
-    io.emit('onlineCount', onlineUsers.size);
+    checkBanned(user, (banned) => {
+      if (banned) return;
+      socket.data.user = user;
+      onlineUsers.set(user.id, user.username);
+      userSockets.set(user.id, socket.id);
+      io.emit('onlineCount', onlineUsers.size);
+    });
   });
 
   socket.on('matchmake', ({ game, user }) => {
     if (!user) return;
-    if (!matchQueue.has(game)) matchQueue.set(game, []);
-    const queue = matchQueue.get(game);
-    // 同一用户同棋类不重复排队
-    if (queue.some(q => q.user.id === user.id)) return;
-    queue.push({ uid: user.id, socketId: socket.id, user, socket });
-    socket.emit('waiting', { game });
-    // 尝试配对
-    setTimeout(() => tryMatch(game), 50);
+    checkBanned(user, (banned) => {
+      if (banned) return;
+      if (!matchQueue.has(game)) matchQueue.set(game, []);
+      const queue = matchQueue.get(game);
+      // 同一用户同棋类不重复排队
+      if (queue.some(q => q.user.id === user.id)) return;
+      queue.push({ uid: user.id, socketId: socket.id, user, socket });
+      socket.emit('waiting', { game });
+      // 尝试配对
+      setTimeout(() => tryMatch(game), 50);
+    });
   });
 
   socket.on('cancelMatch', ({ game, user }) => {
@@ -778,34 +805,41 @@ io.on('connection', (socket) => {
 
   socket.on('aiStart', ({ game, user }) => {
     if (!user) return;
-    // 人机对弈
-    const aiIdx = 1;
-    const aiName = AI_NAMES[Math.floor(Math.random() * AI_NAMES.length)];
-    const human = { uid: user.id, socket, name: user.username, isAI: false, color: 0 };
-    const ai = { uid: -1, socket: null, name: aiName, isAI: true, color: 1 };
-    const room = createRoom(game, [human, ai]);
-    human.socket.join(room.roomId);
-    socket.emit('gameStart', { roomId: room.roomId, game, color: 0, opponentName: aiName });
-    setTimeout(() => emitGameState(room), 100);
-    maybeAITurn(room);
+    checkBanned(user, (banned) => {
+      if (banned) return;
+      // 人机对弈
+      const aiIdx = 1;
+      const aiName = AI_NAMES[Math.floor(Math.random() * AI_NAMES.length)];
+      const human = { uid: user.id, socket, name: user.username, isAI: false, color: 0 };
+      const ai = { uid: -1, socket: null, name: aiName, isAI: true, color: 1 };
+      const room = createRoom(game, [human, ai]);
+      human.socket.join(room.roomId);
+      socket.emit('gameStart', { roomId: room.roomId, game, color: 0, opponentName: aiName });
+      setTimeout(() => emitGameState(room), 100);
+      maybeAITurn(room);
+    });
   });
 
   socket.on('joinRoom', ({ roomId, user }) => {
-    const room = rooms.get(roomId);
-    if (!room) return socket.emit('roomNotFound');
-    const p = room.players.find(x => x.uid === user.id);
-    if (p) {
-      socket.join(roomId);
-      p.socket = socket;
-      if (room.gameOver) {
-        // 宽限8秒: 对局结束则发送结束信息
-        const winnerIdx = room.players.findIndex(x => x.uid !== user.id);
-        socket.emit('gameOver', { winnerName: room.players[winnerIdx].name, reason: '对局已结束' });
-        socket.emit('roomEnd');
-      } else {
-        emitGameState(room);
+    if (!user) return;
+    checkBanned(user, (banned) => {
+      if (banned) return;
+      const room = rooms.get(roomId);
+      if (!room) return socket.emit('roomNotFound');
+      const p = room.players.find(x => x.uid === user.id);
+      if (p) {
+        socket.join(roomId);
+        p.socket = socket;
+        if (room.gameOver) {
+          // 宽限8秒: 对局结束则发送结束信息
+          const winnerIdx = room.players.findIndex(x => x.uid !== user.id);
+          socket.emit('gameOver', { winnerName: room.players[winnerIdx].name, reason: '对局已结束' });
+          socket.emit('roomEnd');
+        } else {
+          emitGameState(room);
+        }
       }
-    }
+    });
   });
 
   socket.on('place', (data) => {
