@@ -1,6 +1,0 @@
-node_modules/
-gobang.db
-*.log
-admin_password.txt
-.DS_Store
-Thumbs.db
