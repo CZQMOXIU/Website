@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>棋类乐园 - 大厅</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    background: linear-gradient(160deg, #0f172a 0%, #1e293b 60%, #1a237e 100%);
+    color: #e2e8f0;
+    padding: 20px;
+  }
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    max-width: 1100px; margin: 0 auto 20px;
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px; padding: 16px 24px;
+  }
+  .header h1 { font-size: 22px; background: linear-gradient(135deg, #64b5f6, #ce93d8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .header .right { display: flex; align-items: center; gap: 16px; }
+  .online { background: rgba(76,175,80,0.15); color: #81c784; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: bold; }
+  .user-chip { background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 20px; font-size: 13px; }
+  .btn-logout { background: rgba(239,83,80,0.2); color: #ef5350; border: none; padding: 6px 14px; border-radius: 20px; cursor: pointer; font-size: 13px; font-family: inherit; }
+  .layout { max-width: 1100px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .card {
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px; padding: 20px;
+  }
+  .card h2 { font-size: 16px; margin-bottom: 14px; color: #90caf9; display: flex; align-items: center; gap: 8px; }
+  .games { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .game-btn {
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px; padding: 14px; text-align: center; cursor: pointer;
+    transition: all .2s; color: #e2e8f0; font-family: inherit;
+  }
+  .game-btn:hover { background: rgba(100,181,246,0.15); border-color: #64b5f6; transform: translateY(-2px); }
+  .game-btn .gi { font-size: 28px; display: block; margin-bottom: 8px; }
+  .game-btn .gn { font-size: 14px; font-weight: bold; }
+  .game-btn .gd { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+  .game-btn.matched { border-color: #66bb6a; background: rgba(102,187,106,0.15); }
+  .match-status { margin-top: 12px; font-size: 13px; color: #94a3b8; min-height: 20px; text-align: center; }
+  .lb-row { display: flex; align-items: center; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
+  .lb-row:nth-child(odd) { background: rgba(255,255,255,0.04); }
+  .lb-row .rank { width: 30px; color: #94a3b8; }
+  .lb-row .rank.top { color: #ffd54f; font-weight: bold; }
+  .lb-row .name { flex: 1; }
+  .lb-row .win { color: #81c784; }
+  .lb-row .rate { color: #64b5f6; font-weight: bold; }
+  .lb-more { text-align: center; margin-top: 10px; font-size: 12px; color: #64748b; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .stat { text-align: center; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 10px; }
+  .stat .num { font-size: 22px; font-weight: bold; color: #64b5f6; }
+  .stat .lbl { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+  .games-matching { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .chip { background: rgba(255,255,255,0.08); padding: 6px 12px; border-radius: 16px; font-size: 12px; color: #94a3b8; }
+  .chip.waiting { color: #ffd54f; }
+  .toast {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.85); color: #fff; padding: 12px 24px;
+    border-radius: 12px; font-size: 14px; z-index: 999; display: none;
+  }
+  @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="toast" id="toast"></div>
+<div class="header">
+  <h1>♟️ 棋类乐园大厅</h1>
+  <div class="right">
+    <span class="online" id="onlineCount">在线 0</span>
+    <span class="user-chip" id="userChip"></span>
+    <button class="btn-logout" onclick="logout()">退出</button>
+  </div>
+</div>
+<div class="layout">
+  <div class="card">
+    <h2>🎮 选择游戏开始对战</h2>
+    <div class="games" id="gamesBox"></div>
+    <div class="match-status" id="matchStatus"></div>
+    <div class="games-matching" id="matchingChips"></div>
+  </div>
+  <div class="card">
+    <h2>🏆 排行榜 · 按胜率排序</h2>
+    <div id="leaderboard"></div>
+    <div class="lb-more">共 <span id="lbTotal">0</span> 名玩家</div>
+  </div>
+  <div class="card">
+    <h2>📊 我的战绩</h2>
+    <div class="stats">
+      <div class="stat"><div class="num" id="myWin">0</div><div class="lbl">胜</div></div>
+      <div class="stat"><div class="num" id="myLose">0</div><div class="lbl">负</div></div>
+      <div class="stat"><div class="num" id="myRate">0%</div><div class="lbl">胜率</div></div>
+    </div>
+    <div style="margin-top:16px;text-align:center;font-size:13px;color:#94a3b8">
+      人机模式支持悔棋（一局3次）· 对局页: <a href="game.html" style="color:#64b5f6">直接进入棋盘</a>
+    </div>
+  </div>
+  <div class="card">
+    <h2>📜 最近对局记录</h2>
+    <div id="recentGames" style="font-size:13px;color:#94a3b8">加载中…</div>
+  </div>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const GAMES = [
+  { key: 'gobang', icon: '⚫', name: '五子棋', desc: '五子连珠获胜' },
+  { key: 'xiangqi', icon: '🐎', name: '中国象棋', desc: '将帅之争' },
+  { key: 'chess', icon: '♞', name: '国际象棋', desc: '国王保卫战' },
+  { key: 'go', icon: '⭕', name: '围棋', desc: '13路 · 数子定胜负' },
+  { key: 'flying', icon: '✈️', name: '飞行棋', desc: '4机到终点获胜' }
+];
+const GAME_CN = { gobang: '五子棋', xiangqi: '中国象棋', chess: '国际象棋', go: '围棋', flying: '飞行棋' };
+let user = null;
+let socket = null;
+const matching = {}; // game -> true/false
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.style.display = 'none', 2500);
+}
+
+function init() {
+  user = JSON.parse(sessionStorage.getItem('user'));
+  if (!user) { location.href = 'login.html'; return; }
+  document.getElementById('userChip').textContent = '👤 ' + user.username;
+  document.getElementById('myWin').textContent = user.win;
+  document.getElementById('myLose').textContent = user.lose;
+  document.getElementById('myRate').textContent = (user.win + user.lose) > 0 ? Math.round(user.win / (user.win + user.lose) * 100) + '%' : '0%';
+  renderGames();
+  loadLeaderboard();
+  loadRecent();
+  connectSocket();
+  setInterval(loadLeaderboard, 10000);
+  setInterval(loadRecent, 15000);
+}
+
+function renderGames() {
+  const box = document.getElementById('gamesBox');
+  box.innerHTML = '';
+  GAMES.forEach(g => {
+    const btn = document.createElement('div');
+    btn.className = 'game-btn';
+    btn.id = 'btn-' + g.key;
+    btn.innerHTML = `<span class="gi">${g.icon}</span><span class="gn">${g.name}</span><span class="gd">${g.desc}</span>`;
+    btn.onclick = () => toggleMatch(g.key);
+    box.appendChild(btn);
+  });
+}
+
+function toggleMatch(key) {
+  if (matching[key]) {
+    socket.emit('cancelMatch', { game: key, user });
+    matching[key] = false;
+    renderMatching();
+    return;
+  }
+  socket.emit('matchmake', { game: key, user });
+  matching[key] = true;
+  renderMatching();
+  toast('已加入【' + GAME_CN[key] + '】匹配队列，等待对手…');
+}
+
+function renderMatching() {
+  const chips = document.getElementById('matchingChips');
+  chips.innerHTML = '';
+  GAMES.forEach(g => {
+    if (matching[g.key]) {
+      const c = document.createElement('span');
+      c.className = 'chip waiting';
+      c.textContent = '⏳ ' + g.name + '匹配中… 点击取消';
+      c.onclick = () => toggleMatch(g.key);
+      chips.appendChild(c);
+    }
+  });
+  let msgs = [];
+  Object.keys(matching).forEach(k => {
+    if (matching[k]) document.getElementById('btn-' + k).classList.add('matched');
+    else document.getElementById('btn-' + k).classList.remove('matched');
+  });
+  document.getElementById('matchStatus').textContent = Object.keys(matching).some(k => matching[k])
+    ? '正在匹配… 匹配成功后自动进入对局' : '点击棋类按钮加入匹配，或在大厅等待自动配对';
+}
+
+function connectSocket() {
+  socket = io();
+  socket.emit('loginSocket', user);
+  socket.on('onlineCount', n => { document.getElementById('onlineCount').textContent = '在线 ' + n; });
+  socket.on('waiting', d => {
+    document.getElementById('matchStatus').textContent = '已在【' + GAME_CN[d.game] + '】队列等待对手…';
+  });
+  socket.on('gameStart', d => {
+    sessionStorage.setItem('room', JSON.stringify({ roomId: d.roomId, game: d.game, color: d.color, opponentName: d.opponentName }));
+    location.href = 'game.html';
+  });
+  socket.on('disconnect', () => {
+    setTimeout(() => { if (!socket.connected) { socket.connect(); } }, 2000);
+  });
+}
+
+function loadLeaderboard() {
+  fetch('/api/leaderboard').then(r => r.json()).then(d => {
+    const box = document.getElementById('leaderboard');
+    document.getElementById('lbTotal').textContent = d.data.length;
+    box.innerHTML = d.data.slice(0, 10).map((r, i) => `
+      <div class="lb-row">
+        <span class="rank ${i < 3 ? 'top' : ''}">${i + 1}</span>
+        <span class="name">${r.username}${r.username === user.username ? ' 👈' : ''}</span>
+        <span class="win">${r.win}胜</span>
+        <span class="rate">${r.winRate}%</span>
+      </div>`).join('') || '<div style="text-align:center;color:#64748b;padding:20px">暂无数据</div>';
+  }).catch(() => {});
+}
+
+function loadRecent() {
+  fetch('/api/admin/games').then(r => r.json()).then(d => {
+    const box = document.getElementById('recentGames');
+    box.innerHTML = d.data.slice(0, 8).map(g => `
+      <div class="lb-row">
+        <span style="width:80px">${GAME_CN[g.game] || g.game}</span>
+        <span class="name">${g.username} vs ${g.opponent}</span>
+        <span class="win">${g.result === 'win' ? '胜' : g.result === 'lose' ? '负' : '平'}</span>
+      </div>`).join('');
+  }).catch(() => {});
+}
+
+function logout() {
+  if (socket) socket.disconnect();
+  sessionStorage.clear();
+  location.href = 'login.html';
+}
+
+init();
+</script>
+</body>
+</html>

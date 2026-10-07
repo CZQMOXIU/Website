@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>棋类乐园 - 管理后台</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", sans-serif;
+    min-height: 100vh; background: #0f172a; color: #e2e8f0; padding: 20px;
+  }
+  .login-box {
+    max-width: 360px; margin: 80px auto; background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 16px; padding: 36px;
+  }
+  .login-box h1 { text-align: center; font-size: 20px; margin-bottom: 24px; color: #90caf9; }
+  .form-group { margin-bottom: 16px; }
+  .form-group input {
+    width: 100%; padding: 12px 14px; border: 2px solid rgba(255,255,255,0.15);
+    border-radius: 10px; background: rgba(255,255,255,0.05); color: #fff;
+    font-size: 15px; outline: none; font-family: inherit;
+  }
+  .form-group input:focus { border-color: #3949ab; }
+  .btn {
+    width: 100%; padding: 12px; border: none; border-radius: 10px;
+    background: #3949ab; color: #fff; font-size: 15px; cursor: pointer; font-family: inherit;
+    transition: all .2s;
+  }
+  .btn:hover { opacity: .85; }
+  .msg { text-align: center; color: #ef5350; margin-top: 12px; font-size: 13px; min-height: 18px; }
+  .main { display: none; max-width: 1300px; margin: 0 auto; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+  .topbar h1 { font-size: 20px; color: #90caf9; }
+  .topbar .btns { display: flex; gap: 10px; }
+  .topbar .btn { width: auto; padding: 8px 16px; }
+  .btn.danger { background: rgba(239,83,80,0.9); }
+  .btn.logout { background: rgba(239,83,80,0.2); color: #ef5350; }
+  .btn.small { width: auto; padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+  .btn.green { background: #2e7d32; }
+  .btn.red { background: #c62828; }
+  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 20px; }
+  .stat { background: rgba(255,255,255,0.06); border-radius: 12px; padding: 16px; text-align: center; }
+  .stat .num { font-size: 26px; font-weight: bold; color: #64b5f6; }
+  .stat .lbl { font-size: 12px; color: #94a3b8; margin-top: 6px; }
+  .card {
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px; padding: 18px; margin-bottom: 20px; overflow: auto;
+  }
+  .card h2 { font-size: 15px; margin-bottom: 12px; color: #90caf9; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08); white-space: nowrap; }
+  th { color: #94a3b8; font-weight: normal; }
+  .win { color: #81c784; }
+  .lose { color: #ef5350; }
+  .draw { color: #ffd54f; }
+  .banned { color: #ef5350; font-weight: bold; }
+  .ok { color: #81c784; }
+  .pwd-cell { font-family: Consolas, monospace; color: #ffd54f; font-size: 12px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+  .action-cell { display: flex; gap: 6px; align-items: center; }
+  .toast {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.88); color: #fff; padding: 12px 24px;
+    border-radius: 12px; font-size: 14px; z-index: 999; display: none;
+  }
+  /* 棋盘弹窗 */
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+    display: none; align-items: center; justify-content: center; z-index: 200;
+  }
+  .modal-mask.show { display: flex; }
+  .modal {
+    background: #1e293b; border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 16px; padding: 20px; max-width: 94vw; max-height: 92vh;
+    overflow: auto; text-align: center;
+  }
+  .modal h3 { color: #90caf9; margin-bottom: 10px; }
+  .modal .info-line { font-size: 13px; color: #94a3b8; margin-bottom: 10px; }
+  .modal canvas { background: #d7a95c; border-radius: 8px; max-width: 100%; }
+  .modal .ctrls { display: flex; gap: 10px; justify-content: center; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+  .modal .btn { width: auto; padding: 8px 18px; }
+  .modal .step-info { font-size: 13px; color: #ffd54f; min-width: 100px; }
+  .modal .close-x { position: absolute; top: 10px; right: 16px; font-size: 22px; cursor: pointer; color: #94a3b8; }
+  @media (max-width: 900px) { .stats { grid-template-columns: repeat(3, 1fr); } }
+</style>
+</head>
+<body>
+<div class="toast" id="toast"></div>
+<div class="login-box" id="loginBox">
+  <h1>🔐 管理后台</h1>
+  <div class="form-group"><input id="admUser" placeholder="管理员账号"></div>
+  <div class="form-group"><input id="admPass" type="password" placeholder="密码"></div>
+  <button class="btn" onclick="adminLogin()">登 录</button>
+  <div class="msg" id="loginMsg"></div>
+</div>
+<div class="main" id="main">
+  <div class="topbar">
+    <h1>📊 棋类乐园管理后台</h1>
+    <div class="btns">
+      <button class="btn danger" onclick="shutdownServer()">⏹ 停止服务器</button>
+      <button class="btn logout" onclick="logout()">退出</button>
+    </div>
+  </div>
+  <div class="stats" id="statsRow"></div>
+  <div class="card">
+    <h2>👥 用户列表（含明文密码 / 封禁状态）</h2>
+    <table><thead><tr><th>ID</th><th>用户名</th><th>密码(明文)</th><th>胜</th><th>负</th><th>平</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead><tbody id="usersBody"></tbody></table>
+  </div>
+  <div class="card">
+    <h2>🎮 对局记录（最近200局 · 可查看棋盘回放）</h2>
+    <table><thead><tr><th>ID</th><th>玩家</th><th>棋类</th><th>对手</th><th>结果</th><th>手数</th><th>时间</th><th>操作</th></tr></thead><tbody id="gamesBody"></tbody></table>
+  </div>
+</div>
+
+<!-- 棋盘回放弹窗 -->
+<div class="modal-mask" id="replayMask">
+  <div class="modal">
+    <span class="close-x" onclick="closeReplay()">✕</span>
+    <h3 id="replayTitle">对局回放</h3>
+    <div class="info-line" id="replayInfo"></div>
+    <canvas id="replayCanvas"></canvas>
+    <div class="ctrls">
+      <button class="btn" onclick="replayStep(-1)">◀ 上一步</button>
+      <button class="btn green" onclick="toggleAuto()">▶ 自动播放</button>
+      <button class="btn" onclick="replayStep(1)">下一步 ▶</button>
+      <span class="step-info" id="stepInfo">0 / 0</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const GAME_CN = { gobang: '五子棋', xiangqi: '中国象棋', chess: '国际象棋', go: '围棋', flying: '飞行棋' };
+function b64(s) { return btoa(unescape(encodeURIComponent(s))); }
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.style.display = 'none', 2500);
+}
+
+async function adminLogin() {
+  const username = document.getElementById('admUser').value.trim();
+  const password = document.getElementById('admPass').value;
+  const msg = document.getElementById('loginMsg');
+  if (!username || !password) { msg.textContent = '请输入账号密码'; return; }
+  try {
+    const r = await (await fetch('/api/admin/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password: b64(password) })
+    })).json();
+    if (r.code !== 0) { msg.textContent = r.msg; return; }
+    sessionStorage.setItem('admin', '1');
+    showMain();
+  } catch (e) { msg.textContent = '网络错误'; }
+}
+
+async function showMain() {
+  document.getElementById('loginBox').style.display = 'none';
+  document.getElementById('main').style.display = 'block';
+  await loadSummary();
+  await loadUsers();
+  await loadGames();
+  setInterval(loadSummary, 5000);
+  setInterval(loadUsers, 10000);
+  setInterval(loadGames, 10000);
+}
+
+async function loadSummary() {
+  try {
+    const r = await (await fetch('/api/admin/summary')).json();
+    const d = r.data;
+    document.getElementById('statsRow').innerHTML = `
+      <div class="stat"><div class="num">${d.totalUsers}</div><div class="lbl">注册用户</div></div>
+      <div class="stat"><div class="num">${d.totalGames}</div><div class="lbl">总对局</div></div>
+      <div class="stat"><div class="num">${d.totalWins}</div><div class="lbl">胜</div></div>
+      <div class="stat"><div class="num">${d.totalLoses}</div><div class="lbl">负</div></div>
+      <div class="stat"><div class="num">${d.totalDraws}</div><div class="lbl">平</div></div>
+      <div class="stat"><div class="num">${d.online}</div><div class="lbl">在线(去重)</div></div>`;
+  } catch (e) {}
+}
+
+async function loadUsers() {
+  try {
+    const r = await (await fetch('/api/admin/users')).json();
+    document.getElementById('usersBody').innerHTML = r.data.map(u => `
+      <tr>
+        <td>${u.id}</td>
+        <td>${u.username}</td>
+        <td class="pwd-cell" title="${u.password}">${u.password}</td>
+        <td class="win">${u.win}</td><td class="lose">${u.lose}</td><td class="draw">${u.draw}</td>
+        <td class="${u.banned ? 'banned' : 'ok'}">${u.banned ? '🚫 已封禁' : '正常'}</td>
+        <td>${u.created_at}</td>
+        <td><div class="action-cell">
+          ${u.banned
+            ? `<button class="btn small green" onclick="banUser(${u.id}, false)">解封</button>`
+            : `<button class="btn small red" onclick="banUser(${u.id}, true)">封号</button>`}
+        </div></td>
+      </tr>`).join('');
+  } catch (e) {}
+}
+
+async function banUser(id, banned) {
+  if (banned && !confirm('确定封禁该账号？将立即下线。')) return;
+  try {
+    const r = await (await fetch('/api/admin/ban', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, banned })
+    })).json();
+    toast(r.msg);
+    if (r.code === 0) { await loadUsers(); }
+  } catch (e) { toast('操作失败'); }
+}
+
+async function shutdownServer() {
+  if (!confirm('确定要强行停止服务器吗？所有在线玩家将被断开。')) return;
+  if (!confirm('再次确认：真的要停止服务器？')) return;
+  try {
+    const r = await (await fetch('/api/admin/shutdown', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }
+    })).json();
+    toast(r.msg);
+    document.getElementById('main').innerHTML = '<div style="text-align:center;padding:60px;font-size:18px;color:#ffd54f">⏹ 服务器已关闭，页面即将无法访问…</div>';
+  } catch (e) { toast('服务器已关闭'); }
+}
+
+async function loadGames() {
+  try {
+    const r = await (await fetch('/api/admin/games')).json();
+    document.getElementById('gamesBody').innerHTML = r.data.map(g => `
+      <tr>
+        <td>${g.id}</td><td>${g.username}</td><td>${GAME_CN[g.game] || g.game}</td>
+        <td>${g.opponent}</td>
+        <td class="${g.result}">${g.result === 'win' ? '胜' : g.result === 'lose' ? '负' : '平'}</td>
+        <td>${g.moves}</td><td>${g.created_at}</td>
+        <td><button class="btn small" onclick="openReplay(${g.id})">📋 查看棋盘</button></td>
+      </tr>`).join('');
+  } catch (e) {}
+}
+
+function logout() {
+  sessionStorage.removeItem('admin');
+  location.reload();
+}
+
+// ==================== 棋盘回放 ====================
+let replay = { steps: [], idx: 0, timer: null, game: '' };
+const RC = 42, RM = 34;
+
+function openReplay(id) {
+  fetch('/api/admin/game?id=' + id).then(r => r.json()).then(d => {
+    if (d.code !== 0) { toast(d.msg); return; }
+    const g = d.data;
+    replay.game = g.game;
+    replay.steps = g.steps || [];
+    replay.idx = 0;
+    document.getElementById('replayTitle').textContent = '对局回放 #' + g.id + ' · ' + (GAME_CN[g.game] || g.game);
+    document.getElementById('replayInfo').textContent = g.username + ' vs ' + g.opponent + ' · ' + (g.result === 'win' ? '胜' : g.result === 'lose' ? '负' : '平') + ' · 共' + g.moves + '手';
+    document.getElementById('replayMask').classList.add('show');
+    stopAuto();
+    renderReplayStep();
+  }).catch(() => toast('加载对局失败'));
+}
+function closeReplay() {
+  document.getElementById('replayMask').classList.remove('show');
+  stopAuto();
+}
+function replayStep(delta) {
+  const n = replay.steps.length;
+  if (!n) return;
+  let idx = replay.idx + delta;
+  if (idx < 0) idx = 0;
+  if (idx >= n) idx = n - 1;
+  replay.idx = idx;
+  renderReplayStep();
+}
+function toggleAuto() {
+  if (replay.timer) { stopAuto(); return; }
+  if (replay.idx >= replay.steps.length - 1) replay.idx = 0;
+  replay.timer = setInterval(() => {
+    if (replay.idx >= replay.steps.length - 1) { stopAuto(); return; }
+    replay.idx++;
+    renderReplayStep();
+  }, 600);
+}
+function stopAuto() {
+  if (replay.timer) { clearInterval(replay.timer); replay.timer = null; }
+}
+function renderReplayStep() {
+  const st = replay.steps[replay.idx];
+  const total = replay.steps.length;
+  document.getElementById('stepInfo').textContent = (replay.idx + 1) + ' / ' + total;
+  if (!st) return;
+  drawReplay(st);
+}
+
+function drawReplay(state) {
+  const canvas = document.getElementById('replayCanvas');
+  const ctx = canvas.getContext('2d');
+  const g = replay.game;
+  const CELL = RC, MARGIN = RM;
+
+  if (g === 'flying') { drawFlyingReplay(ctx, canvas, state); return; }
+
+  if (g === 'gobang' || g === 'go') {
+    const N = g === 'gobang' ? 15 : state.board.length;
+    canvas.width = MARGIN * 2 + (N - 1) * CELL;
+    canvas.height = MARGIN * 2 + (N - 1) * CELL;
+    ctx.fillStyle = '#d7a95c';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#6d4c2f'; ctx.lineWidth = 1;
+    for (let i = 0; i < N; i++) {
+      ctx.beginPath(); ctx.moveTo(MARGIN, MARGIN + i * CELL); ctx.lineTo(MARGIN + (N-1)*CELL, MARGIN + i * CELL); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(MARGIN + i * CELL, MARGIN); ctx.lineTo(MARGIN + i * CELL, MARGIN + (N-1)*CELL); ctx.stroke();
+    }
+    if (g === 'gobang') {
+      const stars = [[3,3],[3,11],[7,7],[11,3],[11,11]];
+      stars.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(MARGIN + x*CELL, MARGIN + y*CELL, 3, 0, Math.PI*2); ctx.fillStyle = '#6d4c2f'; ctx.fill(); });
+    } else {
+      const stars = [[3,3],[3,9],[6,6],[9,3],[9,9]];
+      stars.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(MARGIN + x*CELL, MARGIN + y*CELL, 3, 0, Math.PI*2); ctx.fillStyle = '#6d4c2f'; ctx.fill(); });
+    }
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      if (state.board[y][x] === 0) continue;
+      ctx.beginPath();
+      ctx.arc(MARGIN + x*CELL, MARGIN + y*CELL, CELL * 0.42, 0, Math.PI*2);
+      ctx.fillStyle = state.board[y][x] === 1 ? '#111' : '#fff';
+      ctx.fill();
+      if (state.board[y][x] === 2) { ctx.strokeStyle = '#333'; ctx.stroke(); }
+    }
+    return;
+  }
+
+  if (g === 'xiangqi') {
+    canvas.width = MARGIN * 2 + 8 * CELL;
+    canvas.height = MARGIN * 2 + 9 * CELL;
+    ctx.fillStyle = '#e8c97a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#5d4037'; ctx.lineWidth = 1.5;
+    for (let i = 0; i <= 8; i++) {
+      ctx.beginPath(); ctx.moveTo(MARGIN, MARGIN + i * CELL); ctx.lineTo(MARGIN + 8*CELL, MARGIN + i * CELL); ctx.stroke();
+    }
+    for (let i = 0; i <= 9; i++) {
+      ctx.beginPath(); ctx.moveTo(MARGIN + i * CELL, MARGIN); ctx.lineTo(MARGIN + i * CELL, MARGIN + 9*CELL); ctx.stroke();
+    }
+    [[[3,0],[5,2]],[[5,0],[3,2]],[[3,7],[5,9]],[[5,7],[3,9]]].forEach(([a,b]) => {
+      ctx.beginPath();
+      ctx.moveTo(MARGIN + a[0]*CELL, MARGIN + a[1]*CELL);
+      ctx.lineTo(MARGIN + b[0]*CELL, MARGIN + b[1]*CELL);
+      ctx.stroke();
+    });
+    const pieces = { 1:'炮', 2:'车', 3:'马', 4:'象', 5:'士', 6:'帅', 7:'兵', 11:'炮', 12:'车', 13:'马', 14:'相', 15:'仕', 16:'将', 17:'卒' };
+    for (let y = 0; y < 10; y++) for (let x = 0; x < 9; x++) {
+      const v = state.board[y][x];
+      if (v === 0) continue;
+      const isRed = v < 11;
+      ctx.beginPath();
+      ctx.arc(MARGIN + x*CELL, MARGIN + y*CELL, CELL*0.42, 0, Math.PI*2);
+      ctx.fillStyle = '#f8e5b8';
+      ctx.fill();
+      ctx.strokeStyle = isRed ? '#c62828' : '#263238';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = isRed ? '#c62828' : '#263238';
+      ctx.font = `bold ${CELL*0.44}px "Microsoft YaHei"`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(pieces[v], MARGIN + x*CELL, MARGIN + y*CELL + 2);
+    }
+    return;
+  }
+
+  if (g === 'chess') {
+    canvas.width = MARGIN * 2 + 7 * CELL;
+    canvas.height = MARGIN * 2 + 7 * CELL;
+    ctx.fillStyle = '#f0e6d2';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#5d4037'; ctx.lineWidth = 1.5;
+    for (let i = 0; i <= 8; i++) {
+      ctx.beginPath(); ctx.moveTo(MARGIN, MARGIN + i * CELL); ctx.lineTo(MARGIN + 7*CELL, MARGIN + i * CELL); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(MARGIN + i * CELL, MARGIN); ctx.lineTo(MARGIN + i * CELL, MARGIN + 7*CELL); ctx.stroke();
+    }
+    const pieces = { 1:'♙', 2:'♖', 3:'♘', 4:'♗', 5:'♕', 6:'♔', 11:'♟', 12:'♜', 13:'♞', 14:'♝', 15:'♛', 16:'♚' };
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+      const v = state.board[y][x];
+      if (v === 0) continue;
+      ctx.fillStyle = v < 11 ? '#f5f5f5' : '#1a1a1a';
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(MARGIN + x*CELL, MARGIN + y*CELL, CELL*0.38, 0, Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = v < 11 ? '#c62828' : '#1a1a1a';
+      ctx.font = `${CELL*0.5}px serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(pieces[v], MARGIN + x*CELL, MARGIN + y*CELL + 3);
+    }
+    return;
+  }
+}
+
+function drawFlyingReplay(ctx, canvas, state) {
+  const CELL = RC;
+  canvas.width = 12 * CELL;
+  canvas.height = 11 * CELL;
+  const path = [];
+  for (let x = 0; x < 10; x++) path.push([x, 0]);
+  for (let y = 0; y < 8; y++) path.push([10, y]);
+  for (let x = 10; x > 0; x--) path.push([x, 8]);
+  for (let y = 8; y > 0; y--) path.push([0, y]);
+  ctx.fillStyle = '#16324a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (let i = 0; i < 52; i++) {
+    const [px, py] = path[i % path.length];
+    ctx.fillStyle = (Math.floor(i / 13) % 2 === 0) ? '#1d4a6b' : '#22557a';
+    ctx.fillRect(px * CELL + 2, py * CELL + 2, CELL - 4, CELL - 4);
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.strokeRect(px * CELL + 2, py * CELL + 2, CELL - 4, CELL - 4);
+  }
+  ctx.fillStyle = '#123046';
+  ctx.fillRect(2 * CELL, 1 * CELL, 8 * CELL, 7 * CELL);
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.font = 'bold 18px "Microsoft YaHei"';
+  ctx.textAlign = 'center';
+  ctx.fillText('飞行棋', 6 * CELL, 3.2 * CELL);
+  const players = state.players || [];
+  const corners = [[0.5, 9.5], [10.5, 0.5], [0.5, 0.5], [10.5, 9.5]];
+  players.forEach((p, pi) => {
+    for (let k = 0; k < 4; k++) {
+      const pos = p.pos[k];
+      if (pos === -1) continue;
+      const [px, py] = path[pos % path.length];
+      ctx.beginPath();
+      ctx.arc(px * CELL + CELL / 2, py * CELL + CELL / 2, 8 + k * 2, 0, Math.PI * 2);
+      ctx.fillStyle = p.color;
+      ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+    const [cx, cy] = corners[pi % 4];
+    ctx.fillStyle = p.color;
+    ctx.font = 'bold 12px "Microsoft YaHei"';
+    ctx.fillText(p.name, cx * CELL, cy * CELL + 4);
+    const parked = [0, 1, 2, 3].filter(k => p.pos[k] === -1 && !p.finished[k]);
+    parked.forEach((k, idx) => {
+      ctx.beginPath();
+      ctx.arc(cx * CELL - 20 + idx * 14, cy * CELL + 14, 5, 0, Math.PI * 2);
+      ctx.fillStyle = p.color;
+      ctx.fill();
+    });
+    const fin = (p.finished || []).filter(Boolean).length;
+    if (fin > 0) ctx.fillText('✓'.repeat(fin), cx * CELL, cy * CELL + 26);
+  });
+  if (state.dice) {
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = 'bold 16px "Microsoft YaHei"';
+    ctx.fillText('🎲 ' + state.dice, 6 * CELL, 6.5 * CELL);
+  }
+}
+
+if (sessionStorage.getItem('admin')) showMain();
+</script>
+</body>
+</html>
